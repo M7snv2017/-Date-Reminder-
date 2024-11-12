@@ -27,8 +27,8 @@ namespace PowerGym
         string[] res = { "", "", "" };
         string lastm = "";
         private System.Timers.Timer dailyTimer;
-        string filePath = @"C:\Users\M7sn9\OneDrive\Desktop\ChatIds.txt";
-        string datePath = @"C:\Users\M7sn9\OneDrive\Desktop\dates.txt";
+        string filePath = @"ChatIds.txt";
+        string datePath = @"dates.txt";
 
 
         public Form1()
