@@ -1,11 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
 using System.Linq;
-using System.Text;
-using System.IO;
 using System.Timers;
 using System.Threading.Tasks;
 using Telegram.Bot;
@@ -15,6 +10,8 @@ using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types.Enums;
+using dotenv.net;
+using System.IO;
 
 namespace PowerGym
 {
@@ -27,39 +24,31 @@ namespace PowerGym
         string[] res = { "", "", "" };
         string lastm = "";
         private System.Timers.Timer dailyTimer;
-        string filePath = @"ChatIds.txt";
-        string datePath = @"dates.txt";
-        //string filePath = @"C:\Users\M7sn9\OneDrive\Desktop\ChatIds.txt";
-        //string datePath = @"C:\Users\M7sn9\OneDrive\Desktop\dates.txt";
+        //string filePath = @"ChatIds.txt";
+        //string datePath = @"dates.txt";
+        string filePath = @"C:\Users\M7sn9\OneDrive\Desktop\ChatIds.txt";
+        string datePath = @"C:\Users\M7sn9\OneDrive\Desktop\dates.txt";
+        public static TelegramBotClient botClient;
+        UserManager userManager = new UserManager();
+        private Dictionary<string, UserState> userStates = new Dictionary<string, UserState>();
+
+        
+
+        public struct UserData
+        {
+            public string id;
+            public DateTime lastTargetDate;
+        }
 
         public Form1()
         {
             InitializeComponent();
+            //Dotenv.Load();
+            
 
         }
-        public static TelegramBotClient botClient;
-        private void Form1_Load(object sender, EventArgs e)
-        {
-            Console.WriteLine("Form1_Load is here");
-            master = new TelegramBotClient("7317965896:AAHvyvbJc91j6gb3lyhaUIc1UQM5J4cuGUM");
-            Task.Run(() => StratReciever());
 
-            // Start daily message timer
-            dailyTimer = new System.Timers.Timer(60000); // Check every minute
-            dailyTimer.Elapsed += SendDailyMessage;
-            dailyTimer.AutoReset = true;
-            dailyTimer.Start();
-        }
-
-
-        public async Task StratReciever()
-        {
-            var token = new CancellationTokenSource();
-            var canceltoken = token.Token;
-            reOpt = new ReceiverOptions { AllowedUpdates = { } };
-
-            await master.ReceiveAsync(OnMessage1, ErrorMessage, reOpt, canceltoken);
-        }
+        
         public async Task OnMessage1(ITelegramBotClient botClient, Update update, CancellationToken canceltoken)
         {
             if (update.Type != UpdateType.Message)
@@ -73,153 +62,173 @@ namespace PowerGym
             {
                 try
                 {
-                    //if(message.Text.ToString()=="3")
-                    //{
-                    //    return;
-                    //}
-                    //Console.WriteLine("OnMessage1 is here");
                     Console.WriteLine("Received message: " + message.Text);
                     m = message;
+                    string userId = message.Chat.Id.ToString();
+
+                    // Check if the user is in the userStates dictionary
+                    if (!userStates.ContainsKey(userId))
+                    {
+                        userStates[userId] = new UserState();
+                    }
+
+                    var us = userStates[userId];
+
                     if (message.Text == "/start")
                     {
-                        state[1] = false; state[2] = false;
-                        lastm = "ادخل السنه الميلادية ل انتهاء الاشتراك yyyy.";
+                        us.Reset();  // Reset state when the user starts over
+                        lastm = "من فضلك أدخل السنة الميلادية (yyyy).";
                         await botClient.SendTextMessageAsync(message.Chat.Id, lastm);
-                        state[0] = true;//waiting for year
+                        us.IsExpectingYear = true; // Waiting for year
 
                         return;
                     }
-                    else if (state[0]) // Expecting year
+                    else if (message.Text == "/save2remind") // Save to file
+                    {
+                        // No need to save again, the date has been saved already during the /start process
+                        await botClient.SendTextMessageAsync(message.Chat.Id, "تم حفظ تاريخك بنجاح!");
+
+                        // Save the current target date to the file
+                        DateTime targetDate = new DateTime(int.Parse(us.Year), int.Parse(us.Month), int.Parse(us.Day));
+                        WriteIdAndDateToFile(message.Chat.Id.ToString(), targetDate);
+
+                        return;
+                    }
+                    else if (message.Text == "/showdate") // Show the saved date from file
+                    {
+                        // Show the saved target date for the user
+                        
+                        if (!IsIdNew(message.Chat.Id.ToString()))
+                        {
+                            await botClient.SendTextMessageAsync(message.Chat.Id, $"تاريخك المحفوظ هو: {GetDateByIndex(GetIndexOfChatId(message.Chat.Id.ToString()))}.");
+                            return;
+                        }
+                        else
+                        {
+                            await botClient.SendTextMessageAsync(message.Chat.Id, "لم تقم بحفظ تاريخ بعد.");
+                            return;
+                        }
+                        
+                    }
+
+                    else if (us.IsExpectingYear) // Expecting year
                     {
                         if (int.TryParse(message.Text, out int year) && year > 2020 && year < 2040)
                         {
-                            state[0] = false;
-                            res[0] = message.Text;
-                            lastm = "ادخل الشهر mm.";
+                            us.Year = message.Text;
+                            lastm = "من فضلك أدخل الشهر (mm).";
                             await botClient.SendTextMessageAsync(message.Chat.Id, lastm);
-                            state[1] = true;
+                            us.IsExpectingYear = false;
+                            us.IsExpectingMonth = true;
                         }
                         else
                         {
+                            lastm = "السنة غير صحيحة.";
                             await botClient.SendTextMessageAsync(message.Chat.Id, lastm);
                         }
+                        return;
                     }
-                    else if (state[1]) // Expecting month
+                    else if (us.IsExpectingMonth) // Expecting month
                     {
                         if (int.TryParse(message.Text, out int month) && month > 0 && month <= 12)
                         {
-                            state[1] = false;
-                            res[1] = message.Text;
-                            lastm = "ادخل اليوم dd.";
+                            us.Month = message.Text;
+                            lastm = "من فضلك أدخل اليوم (dd).";
                             await botClient.SendTextMessageAsync(message.Chat.Id, lastm);
-                            state[2] = true;
+                            us.IsExpectingMonth = false;
+                            us.IsExpectingDay = true;
                         }
                         else
                         {
+                            lastm = "الشهر غير صحيح.";
                             await botClient.SendTextMessageAsync(message.Chat.Id, lastm);
                         }
+                        return;
                     }
-                    else if (state[2]) // Expecting day
+                    else if (us.IsExpectingDay) // Expecting day
                     {
                         if (int.TryParse(message.Text, out int day) && day > 0 && day <= 31)
                         {
-                            state[2] = false;
-                            res[2] = message.Text;
+                            us.Day = message.Text;
 
-                            DateTime targetDate = new DateTime(Convert.ToInt32(res[0]), Convert.ToInt32(res[1]), Convert.ToInt32(res[2])); 
+                            // Construct the target date from the current session's input
+                            DateTime targetDate = new DateTime(int.Parse(us.Year), int.Parse(us.Month), int.Parse(us.Day));
                             DateTime currentDate = DateTime.Now;
 
                             int daysLeft = (targetDate - currentDate).Days;
 
-                            await botClient.SendTextMessageAsync(message.Chat.Id, $"Days left until {targetDate.ToShortDateString()}: {daysLeft} days");
+                            await botClient.SendTextMessageAsync(message.Chat.Id, $"تبقى {daysLeft} يوم حتى {targetDate.ToShortDateString()}.");
+                            await botClient.SendTextMessageAsync(message.Chat.Id,  "\n اضغط على \n /save2remind \nاذا تريد ان تحفظ هذا التاريخ لنذكرك كل يوم كم تبقى على تاريخك");
+
+                            // Save or update the user's target date
+                            userManager.AddOrUpdateUser(userId, targetDate);
+                            us.Reset();
                         }
                         else
                         {
+                            lastm = "اليوم غير صحيح.";
                             await botClient.SendTextMessageAsync(message.Chat.Id, lastm);
                         }
+                        return;
                     }
-                    else if(message.Text== "/reminder")
+                    else
                     {
-                        await Task.Run(()=>AddChatIdToFile(message.Chat.Id.ToString(),new DateTime(Convert.ToInt32(res[0]), Convert.ToInt32(res[1]), Convert.ToInt32(res[2]))));
-                        await botClient.SendTextMessageAsync(message.Chat.Id, "we added you successfully!");
-                        
+                        await botClient.SendTextMessageAsync(message.Chat.Id, "😂😂");
                     }
                 }
-                catch (FormatException)
+                catch (Exception e)
                 {
-                    //If the conversion fails, handle the error
-                    await HandleInvalidNumberInput(botClient, message);
+                    // Handle invalid input
+                    lastm = "الرجاء إدخال رقم إنجليزي.";
+                    await botClient.SendTextMessageAsync(message.Chat.Id, lastm +"\n"+ e);
                     return;
                 }
             }
-
-
         }
 
-        public async Task HandleInvalidNumberInput(ITelegramBotClient botClient, Telegram.Bot.Types.Message message)
+
+        private bool IsIdNew(string id)
         {
-            string errorMessage = "رقم انجليزي."; // Prompt user to enter a valid number
-            await botClient.SendTextMessageAsync(message.Chat.Id, errorMessage);
-
-            // Waiting for the user to enter a valid number can be handled here.
-            // Depending on how you handle input continuation, you might loop back to OnMessage or directly retry from here.
-        }
-        public async Task ErrorMessage(ITelegramBotClient telegramBot, Exception e, CancellationToken cancellation)
-        {
-            if (e is ApiRequestException requestException)
-            {
-                Console.WriteLine($"Telegram API Error:\nError Code: [{requestException.ErrorCode}]\nMessage: {requestException.Message}");
-
-                // Notify user about the error if possible
-                if (m?.Chat != null)
-                {
-                    await telegramBot.SendTextMessageAsync(m.Chat.Id, "An error occurred. Please try again with valid input.");
-                }
-            }
-            else
-            {
-                Console.WriteLine($"Unexpected Error: {e.Message}");
-            }
-
-            // Reset state to prevent bot from getting stuck
-            Array.Clear(state, 0, state.Length);  // Resets the state array to all false
-            lastm = "An error occurred. Please restart with /start.";
-        }
-        public async Task AddChatIdToFile(string chatId, DateTime targetDate)
-        {
-            // Check if the ID already exists
-            if (!CheckIfIdExists(chatId))
-            {
-                // Add chat ID to the file
-                using (StreamWriter writer = new StreamWriter(filePath, append: true))
-                {
-                    writer.WriteLine(chatId);
-                }
-
-                // Add target date to the date file
-                using (StreamWriter writer = new StreamWriter(datePath, append: true))
-                {
-                    writer.WriteLine(targetDate.ToString("yyyy-MM-dd"));
-                }
-
-                Console.WriteLine($"ID: \"{chatId}\" and target date \"{targetDate.ToShortDateString()}\" have been added.");
-            }
-            else
-            {
-                Console.WriteLine($"ID: \"{chatId}\" already exists.");
-            }
-        }
-
-        public bool CheckIfIdExists(string chatId)
-        {
-            // Read all IDs from the file and check if the chatId exists
             if (System.IO.File.Exists(filePath))
             {
                 var chatIds = System.IO.File.ReadAllLines(filePath);
-                return chatIds.Contains(chatId);
+                return !chatIds.Contains(id);
             }
-            return false;
+            return true; // If file doesn't exist, treat as new ID
         }
+        private void WriteIdAndDateToFile(string id, DateTime date)
+        {
+            if (IsIdNew(id))
+            {
+                System.IO.File.AppendAllText(filePath, id + Environment.NewLine); // Append ID to file
+                System.IO.File.AppendAllText(datePath, date.ToString("yyyy-MM-dd") + Environment.NewLine); // Append date to file
+            }
+        }
+        private int GetIndexOfChatId(string id)
+        {
+            if (System.IO.File.Exists(filePath))
+            {
+                var chatIds = System.IO.File.ReadAllLines(filePath);
+                return Array.IndexOf(chatIds, id); // Returns -1 if not found
+            }
+            return -1;
+        }
+        private DateTime? GetDateByIndex(int index)
+        {
+            if (System.IO.File.Exists(datePath))
+            {
+                var dates = System.IO.File.ReadAllLines(datePath);
+                if (index >= 0 && index < dates.Length)
+                {
+                    if (DateTime.TryParse(dates[index], out DateTime date))
+                    {
+                        return date;
+                    }
+                }
+            }
+            return null;
+        }
+
 
         private async void SendDailyMessage(object sender, ElapsedEventArgs e)
         {
@@ -251,6 +260,112 @@ namespace PowerGym
                 }
             }
         }
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            DotNetEnv.Env.Load();
+            var TELEGRAM_BOT_TOKEN = DotNetEnv.Env.GetString("TELEGRAM_BOT_TOKEN");
+            // Initialize the TelegramBotClient with the token
+            master = new TelegramBotClient(TELEGRAM_BOT_TOKEN.ToString());
+            Console.WriteLine("Form1_Load is here");
+
+            Task.Run(() => StratReciever());
+
+            // Start daily message timer
+            dailyTimer = new System.Timers.Timer(60000); // Check every minute
+            dailyTimer.Elapsed += SendDailyMessage;
+            dailyTimer.AutoReset = true;
+            dailyTimer.Start();
+        }
+        public async Task HandleInvalidNumberInput(ITelegramBotClient botClient, Telegram.Bot.Types.Message message)
+        {
+            string errorMessage = "رقم انجليزي."; // Prompt user to enter a valid number
+            await botClient.SendTextMessageAsync(message.Chat.Id, errorMessage);
+
+            // Waiting for the user to enter a valid number can be handled here.
+            // Depending on how you handle input continuation, you might loop back to OnMessage or directly retry from here.
+        }
+        public async Task ErrorMessage(ITelegramBotClient telegramBot, Exception e, CancellationToken cancellation)
+        {
+            if (e is ApiRequestException requestException)
+            {
+                Console.WriteLine($"Telegram API Error:\nError Code: [{requestException.ErrorCode}]\nMessage: {requestException.Message}");
+
+                // Notify user about the error if possible
+                if (m?.Chat != null)
+                {
+                    await telegramBot.SendTextMessageAsync(m.Chat.Id, "An error occurred. Please try again with valid input.");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"Unexpected Error: {e.Message}");
+            }
+
+            // Reset state to prevent bot from getting stuck
+            Array.Clear(state, 0, state.Length);  // Resets the state array to all false
+            lastm = "An error occurred. Please restart with /start.";
+        }
+        public async Task StratReciever()
+        {
+            var token = new CancellationTokenSource();
+            var canceltoken = token.Token;
+            reOpt = new ReceiverOptions { AllowedUpdates = { } };
+
+            await master.ReceiveAsync(OnMessage1, ErrorMessage, reOpt, canceltoken);
+        }
+        public class UserManager
+        {
+            private UserData[] users = new UserData[15]; // Array to hold up to 15 users
+            private int currentIndex = 0; // Track the current index for adding users
+
+            // Method to add or update the user's target date
+            public void AddOrUpdateUser(string userId, DateTime targetDate)
+            {
+                // Check if the user already exists in the array
+                int index = Array.FindIndex(users, u => u.id == userId);
+
+                if (index >= 0) // If user exists, update their date
+                {
+                    users[index].lastTargetDate = targetDate;
+                }
+                else
+                {
+                    // If the array is full, overwrite the first user
+                    if (currentIndex >= users.Length)
+                    {
+                        currentIndex = 0; // Reset to the first position
+                    }
+                    // Add new user data
+                    users[currentIndex] = new UserData { id = userId, lastTargetDate = targetDate };
+                    currentIndex++; // Move to the next index
+                }
+            }
+
+            // Method to get the saved date for a user
+            public DateTime? GetSavedDate(string userId)
+            {
+                var user = Array.Find(users, u => u.id == userId);
+                return user.id != null ? (DateTime?)user.lastTargetDate : null; // Return null if user not found
+            }
+        }
+        public class UserState
+        {
+            public string Year { get; set; }
+            public string Month { get; set; }
+            public string Day { get; set; }
+            public bool IsExpectingYear { get; set; }
+            public bool IsExpectingMonth { get; set; }
+            public bool IsExpectingDay { get; set; }
+
+            // Reset the state for this user
+            public void Reset()
+            {
+                IsExpectingYear = false;
+                IsExpectingMonth = false;
+                IsExpectingDay = false;
+            }
+        }
+
     }
 }
 
