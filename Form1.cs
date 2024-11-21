@@ -43,7 +43,6 @@ namespace PowerGym
         public Form1()
         {
             InitializeComponent();
-            //Dotenv.Load();
             
 
         }
@@ -110,10 +109,20 @@ namespace PowerGym
                         }
                         
                     }
-
+                    else if (message.Text == "/delete")
+                    {
+                        if (DeleteReminderDate(message.Chat.Id.ToString()))
+                        {
+                            await botClient.SendTextMessageAsync(message.Chat.Id, "حذفنا تاريخك المحفوظ.");
+                        }
+                        else
+                        {
+                            await botClient.SendTextMessageAsync(message.Chat.Id, "لسبب ما لم يتم حذف تاريخك المحفوظ.");
+                        }
+                    }
                     else if (us.IsExpectingYear) // Expecting year
                     {
-                        if (int.TryParse(message.Text, out int year) && year > 2020 && year < 2040)
+                        if (int.TryParse(message.Text, out int year) && year > 2024 && year < 9999)
                         {
                             us.Year = message.Text;
                             lastm = "من فضلك أدخل الشهر (mm).";
@@ -203,6 +212,16 @@ namespace PowerGym
                 System.IO.File.AppendAllText(filePath, id + Environment.NewLine); // Append ID to file
                 System.IO.File.AppendAllText(datePath, date.ToString("yyyy-MM-dd") + Environment.NewLine); // Append date to file
             }
+            else
+            {
+                int index = GetIndexOfChatId(id);
+
+                var dates = System.IO.File.ReadAllLines(datePath).ToList();
+
+                dates[index] = date.ToString("yyyy-MM-dd");
+
+                System.IO.File.WriteAllLines(datePath, dates);
+            }
         }
         private int GetIndexOfChatId(string id)
         {
@@ -213,7 +232,7 @@ namespace PowerGym
             }
             return -1;
         }
-        private DateTime? GetDateByIndex(int index)
+        private string GetDateByIndex(int index)
         {
             if (System.IO.File.Exists(datePath))
             {
@@ -222,48 +241,92 @@ namespace PowerGym
                 {
                     if (DateTime.TryParse(dates[index], out DateTime date))
                     {
-                        return date;
+                        return date.ToString("M/d/yyyy"); // Format as "1/21/2026"
                     }
                 }
             }
             return null;
         }
 
+        private bool DeleteReminderDate(string id)
+        {
+            // Read all IDs and dates into lists
+            var ids = System.IO.File.ReadAllLines(filePath).ToList();
+            var dates = System.IO.File.ReadAllLines(datePath).ToList();
+
+            // Find the index of the ID to delete
+            int index = ids.IndexOf(id);
+
+            // If the ID exists, remove it and its corresponding date
+            if (index != -1)
+            {
+                ids.RemoveAt(index);   // Remove the ID
+                dates.RemoveAt(index); // Remove the corresponding date
+
+                // Write the updated lists back to their respective files
+                System.IO.File.WriteAllLines(filePath, ids);
+                System.IO.File.WriteAllLines(datePath, dates);
+            }
+            return IsIdNew(id);
+        }
 
         private async void SendDailyMessage(object sender, ElapsedEventArgs e)
         {
             DateTime now = DateTime.Now;
 
-            if (now.Hour == 6 && now.Minute == 00) // Check if it's exactly 5:00 AM
+            if (now.Hour == 8 && now.Minute == 00)
             {
                 if (System.IO.File.Exists(filePath) && System.IO.File.Exists(datePath))
                 {
                     var chatIds = System.IO.File.ReadAllLines(filePath);
                     var targetDates = System.IO.File.ReadAllLines(datePath);
 
+                    if (chatIds.Length != targetDates.Length)
+                    {
+                        Console.WriteLine($"Mismatch detected: {chatIds.Length} chat IDs and {targetDates.Length} target dates.");
+                        return;
+                    }
+
                     for (int i = 0; i < chatIds.Length; i++)
                     {
                         string chatIdStr = chatIds[i];
                         if (long.TryParse(chatIdStr, out long chatId))
                         {
-                            DateTime targetDate;
-                            if (DateTime.TryParse(targetDates[i], out targetDate))
+                            if (DateTime.TryParse(targetDates[i], out DateTime targetDate))
                             {
-                                // Calculate days left
                                 int daysLeft = (targetDate - DateTime.Now).Days;
 
-                                // Send message to the user
-                                await master.SendTextMessageAsync(chatId, $"Days left until {targetDate.ToShortDateString()}: {daysLeft} days");
+                                try
+                                {
+                                    await master.SendTextMessageAsync(chatId, $"⚠️ Days left until {targetDate.ToShortDateString()}: {daysLeft} days");
+
+                                    if (daysLeft <= 0)
+                                    {
+                                        if (DeleteReminderDate(chatIdStr))
+                                        {
+                                            await master.SendTextMessageAsync(chatId, "حذفنا تاريخك المحفوظ.");
+                                        }
+                                        else
+                                        {
+                                            await master.SendTextMessageAsync(chatId, "لسبب ما لم يتم حذف تاريخك المحفوظ.");
+                                        }
+                                    }
+                                }
+                                catch (Telegram.Bot.Exceptions.ApiRequestException ex)
+                                {
+                                    Console.WriteLine($"Error sending message to chat ID {chatId}: {ex.Message}");
+                                }
                             }
                         }
                     }
                 }
             }
         }
+
         private void Form1_Load(object sender, EventArgs e)
         {
             DotNetEnv.Env.Load();
-            var TELEGRAM_BOT_TOKEN = DotNetEnv.Env.GetString("TELEGRAM_BOT_TOKEN");
+            var TELEGRAM_BOT_TOKEN = DotNetEnv.Env.GetString("BOT_TOKEN");
             // Initialize the TelegramBotClient with the token
             master = new TelegramBotClient(TELEGRAM_BOT_TOKEN.ToString());
             Console.WriteLine("Form1_Load is here");
